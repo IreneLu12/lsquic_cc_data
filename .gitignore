@@ -18,6 +18,25 @@ myapp           # 忽略自定义可执行文件 myapp
 build/
 out/
 cmake-build-debug/
+# ========== CMake 相关文件 ==========
+# CMake 缓存和配置文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+# CMake 生成的其他文件
+*.cmake
+!CMakeLists.txt
+# ========== Make 相关文件 ==========
+# Makefile 生成的文件（如果不想忽略 Makefile 本身，可以删除下面这行）
+# Makefile
+Makefile.in
+*.mk
+.depend
+.deps/
 # ========== 其他通用忽略项（可选） ==========
 # vim 临时文件
 *.swp
