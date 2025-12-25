@@ -1,0 +1,50 @@
+# CMake build artifacts
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+cmake_install.cmake
+Makefile
+Testing/
+
+# Build directories
+build/
+_build/
+
+# Compiled binaries
+*.so
+*.a
+*.dylib
+*.dll
+*.exe
+
+# Generated source files
+*_versions_to_string.c
+
+# Binaries in bin/ directory
+bin/*
+!bin/.gitkeep
+
+# Test executables
+tests/graph_cubic
+tests/mini_parse
+tests/test_*
+tests/CMakeFiles/
+tests/CTestTestfile.cmake
+tests/Makefile
+tests/cmake_install.cmake
+
+# Source directory build artifacts
+src/CMakeFiles/
+src/Makefile
+src/cmake_install.cmake
+src/liblsquic/CMakeFiles/
+src/liblsquic/Makefile
+src/liblsquic/cmake_install.cmake
+src/liblsquic/*.so
+src/liblsquic/*.a
+src/liblsquic/*_versions_to_string.c
+
+# CMake generated config files (if they are generated)
+# Uncomment if lsquic-config.cmake is generated
+# src/liblsquic/lsquic-config.cmake
+
