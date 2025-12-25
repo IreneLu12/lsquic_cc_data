@@ -27,6 +27,9 @@ install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
 _deps/
+tests/
+Testing/
+Makefile
 # CMake 生成的其他文件
 *.cmake
 !CMakeLists.txt
@@ -45,3 +48,16 @@ Makefile.in
 .idea/
 .vscode/
 *.DS_Store      # macOS 系统文件
+src/liblsquic/lsquic-config.cmake
+
+bin/duck_client
+bin/duck_server
+bin/echo_client
+bin/echo_server
+bin/http_client
+bin/http_server
+bin/md5_client
+bin/md5_server
+bin/perf_client
+bin/perf_server
+bin/test_config.h
