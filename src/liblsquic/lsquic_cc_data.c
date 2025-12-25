@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "lsquic_congestion_data.h"
+#include "lsquic_cc_data.h"
 #include "lsquic_varint.h"
 #include "lsquic_int_types.h"
 #include "lsquic.h"
@@ -91,7 +91,7 @@ static int
 encode_stat_field_u32 (unsigned char **pbuf, size_t *prem, enum cc_stats_type type,
                         uint32_t value)
 {
-    return encode_stat_field(pbuf, prem, type, (uint64_t)value);
+    return encode_cc_stat_field(pbuf, prem, type, (uint64_t)value);
 }
 
 static int
@@ -340,7 +340,7 @@ lsquic_cc_data_decode (const unsigned char *buf, size_t bufsz, struct cc_network
         
 
         case CC_STAT_PATH_TUPLE:
-            n = lsquic_cc_path_tuple_decode(&p, end - p, &stats->path_tuple);
+            n = lsquic_cc_path_tuple_decode(p, end - p, &stats->path_tuple);
             if (n < 0)
                 return -1;
             p += n;
@@ -385,6 +385,7 @@ lsquic_cc_data_decode (const unsigned char *buf, size_t bufsz, struct cc_network
         case CC_STAT_LATEST_BANDWIDTH:
             stats->latest_bandwidth = value;
             stats->fields_set |= CC_FIELD_LATEST_BANDWIDTH;
+            break;
 
         case CC_STAT_MAX_BANDWIDTH:
             stats->max_bandwidth = value;
@@ -510,7 +511,7 @@ lsquic_cc_path_tuple_decode (const unsigned char *buf, size_t bufsz, struct cc_p
 
 int
 lsquic_cc_data_integrity_tag_encode (const struct cc_integrity_tag *tag,
-                                        unsigned char *buf, size_t bufsz);
+                                        unsigned char *buf, size_t bufsz)
 {
     if (!tag || !buf)
         return -1;
@@ -594,7 +595,7 @@ lsquic_cc_data_recall_decode (const unsigned char *buf, size_t bufsz, struct cc_
         return -1;
 
     /* Decode path tuple */
-    n = lsquic_congestion_path_tuple_decode(p, end - p, &recall->path_tuple);
+    n = lsquic_cc_path_tuple_decode(p, end - p, &recall->path_tuple);
     if (n < 0)
         return -1;
     p += n;
@@ -712,7 +713,7 @@ detect_network_type (const struct network_path *path)
 {
     /* Simple heuristic: check if it's a loopback address */
     if (!path)
-        return CD_NET_TYPE_UNKNOWN;
+        return CC_NET_TYPE_UNKNOWN;
 
     // LU::TODO
     return CC_NET_TYPE_WIRED;

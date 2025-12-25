@@ -7,6 +7,7 @@ SET(lsquic_STAT_SRCS
     lsquic_attq.c
     lsquic_bbr.c
     lsquic_bw_sampler.c
+    lsquic_cc_data.c
     lsquic_cfcw.c
     lsquic_chsk_stream.c
     lsquic_conn.c

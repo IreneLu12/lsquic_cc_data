@@ -24,6 +24,7 @@ enum cc_network_type
     CC_NET_TYPE_3G                    = 0x05,
     CC_NET_TYPE_4G                    = 0x06,
     CC_NET_TYPE_5G                    = 0x07,
+    CC_NET_TYPE_UNKNOWN               = 0xFF,
 };
 
 
@@ -117,7 +118,7 @@ struct cc_integrity_tag
     uint8_t     algorithm_id;         /* Algorithm identifier (1 = HMAC-SHA256) */
     uint16_t    nonce;                /* Private nonce */
     uint8_t     digest[32];           /* SHA256 digest */
-}
+};
 
 struct cc_data_recall
 {
