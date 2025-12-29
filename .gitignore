@@ -1,3 +1,67 @@
+# ========== 编译产物忽略规则 ==========
+# 忽略 .o 目标文件（最常见的编译中间文件）
+*.o
+# 忽略 .make 文件
+*.make
+# 忽略 .a 静态库文件
+*.a
+# 忽略 .so 动态库/共享库文件
+*.so
+# 忽略 .d 依赖文件（编译器自动生成的依赖关系文件）
+*.d
+# 忽略 .obj Windows 下的目标文件
+*.obj
+# 忽略可执行文件（无后缀的，比如 a.out 或自定义编译产物）
+/a.out          # 仅忽略根目录的 a.out（加 / 避免子目录同名文件被误忽略）
+myapp           # 忽略自定义可执行文件 myapp
+# 忽略编译输出目录（比如 build/、out/ 等）
+build/
+out/
+cmake-build-debug/
+# ========== CMake 相关文件 ==========
+# CMake 缓存和配置文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+tests/
+Testing/
+Makefile
+# CMake 生成的其他文件
+*.cmake
+!CMakeLists.txt
+# ========== Make 相关文件 ==========
+# Makefile 生成的文件（如果不想忽略 Makefile 本身，可以删除下面这行）
+# Makefile
+Makefile.in
+*.mk
+.depend
+.deps/
+# ========== 其他通用忽略项（可选） ==========
+# vim 临时文件
+*.swp
+*.swo
+# 编辑器缓存
+.idea/
+.vscode/
+*.DS_Store      # macOS 系统文件
+src/liblsquic/lsquic-config.cmake
+
+bin/duck_client
+bin/duck_server
+bin/echo_client
+bin/echo_server
+bin/http_client
+bin/http_server
+bin/md5_client
+bin/md5_server
+bin/perf_client
+bin/perf_server
+bin/test_config.h
+
 # CMake build artifacts
 CMakeCache.txt
 CMakeFiles/
