@@ -2289,7 +2289,6 @@ lsquic_engine_process_conns (lsquic_engine_t *engine)
             engine_incref_conn(conn, LSCONN_TICKABLE);
         }
     }
-
     process_connections(engine, conn_iter_next_tickable, now);
     ENGINE_OUT(engine);
 }

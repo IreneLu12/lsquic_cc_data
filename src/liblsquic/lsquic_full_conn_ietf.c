@@ -56,6 +56,7 @@
 #include "lsquic_trans_params.h"
 #include "lsquic_version.h"
 #include "lsquic_parse.h"
+#include "lsquic_cc_data.h"
 #include "lsquic_util.h"
 #include "lsquic_enc_sess.h"
 #include "lsquic_ev_log.h"
@@ -147,6 +148,9 @@ enum ifull_conn_flags
     IFC_DELAYED_ACKS  = 1 << 29, /* Delayed ACKs are enabled */
     IFC_TIMESTAMPS    = 1 << 30, /* Timestamps are enabled */
     IFC_DATAGRAMS     = 1u<< 31, /* Datagrams are enabled */
+    /* Note: IFC_CONGESTION_DATA cannot use 1u<<30 (conflicts with IFC_TIMESTAMPS),
+     * and cannot use 1u<<16 or 1u<<17 (used by IFC_ACK_QUED_HSK and IFC_ACK_QUED_APP).
+     * Since all bits 0-31 are used, we move IFC_CONGESTION_DATA to more_flags instead. */
 };
 
 
@@ -161,6 +165,8 @@ enum more_flags
     MF_WANT_DATAGRAM_WRITE  = 1 << 6,
     MF_DOING_0RTT       = 1 << 7,
     MF_HAVE_HCSI        = 1 << 8,   /* Have HTTP Control Stream Incoming */
+    MF_WANT_CC_DATA_SEND = 1 << 9,  /* Want to send CONGESTION_DATA frame */
+    MF_CONGESTION_DATA  = 1 << 10,  /* Congestion control data exchange enabled (moved from ifc_flags due to bit conflict) */
 };
 
 
@@ -525,6 +531,7 @@ struct ietf_full_conn
     lsquic_time_t               ifc_idle_to;
     lsquic_time_t               ifc_ping_period;
     lsquic_time_t               ifc_last_tick;
+    lsquic_time_t               ifc_last_cc_data_sent;  /* Last time CONGESTION_DATA was sent */
     struct lsquic_hash         *ifc_bpus;
     uint64_t                    ifc_last_max_data_off_sent;
     struct packet_tolerance_stats
@@ -534,6 +541,15 @@ struct ietf_full_conn
                                *ifc_last_stats;
 #endif
     struct ack_info             ifc_ack;
+
+    /* Congestion control data storage */
+    struct {
+        struct cc_network_stats *entries;    /* Array of stored statistics */
+        unsigned                count;       /* Number of entries */
+        unsigned                capacity;    /* Maximum capacity */
+        unsigned                next_idx;    /* Next index for circular buffer */
+    }                           ifc_cc_data_storage;
+
 };
 
 #define CUR_CPATH(conn_) (&(conn_)->ifc_paths[(conn_)->ifc_cur_path_id])
@@ -604,6 +620,13 @@ packet_tolerance_alarm_expired (enum alarm_id al_id, void *ctx,
 
 static int
 init_http (struct ietf_full_conn *);
+
+static void
+store_cc_data (struct ietf_full_conn *, const struct cc_network_stats *);
+
+static int
+write_congestion_data_with_stats (struct ietf_full_conn *,
+                                   const struct cc_network_stats *);
 
 static unsigned
 highest_bit_set (unsigned sz)
@@ -1300,6 +1323,12 @@ ietf_full_conn_init (struct ietf_full_conn *conn,
     lsquic_alarmset_init_alarm(&conn->ifc_alset, AL_PATH_CHAL_3, path_chal_alarm_expired, conn);
     lsquic_alarmset_init_alarm(&conn->ifc_alset, AL_BLOCKED_KA, blocked_ka_alarm_expired, conn);
     lsquic_alarmset_init_alarm(&conn->ifc_alset, AL_MTU_PROBE, mtu_probe_alarm_expired, conn);
+    /* Initialize congestion control data storage */
+    conn->ifc_cc_data_storage.entries = NULL;
+    conn->ifc_cc_data_storage.count = 0;
+    conn->ifc_cc_data_storage.capacity = 0;
+    conn->ifc_cc_data_storage.next_idx = 0;
+    conn->ifc_last_cc_data_sent = 0;  /* Initialize last send time */
     /* For Init and Handshake, we don't expect many ranges at all.  For
      * the regular receive history, set limit to a value that would never
      * be reached under normal circumstances, yet small enough that would
@@ -3223,6 +3252,9 @@ ietf_full_conn_ci_destroy (struct lsquic_conn *lconn)
             free(lsquic_hashelem_getdata(el));
         lsquic_hash_destroy(conn->ifc_bpus);
     }
+    /* Free congestion control data storage */
+    if (conn->ifc_cc_data_storage.entries)
+        free(conn->ifc_cc_data_storage.entries);
     lsquic_hash_destroy(conn->ifc_pub.all_streams);
 #if LSQUIC_CONN_STATS
     if (conn->ifc_flags & IFC_CREATED_OK)
@@ -3696,7 +3728,9 @@ apply_trans_params (struct ietf_full_conn *conn,
             params->tp_numerics[TPI_MAX_DATAGRAM_FRAME_SIZE] > USHRT_MAX
             ? USHRT_MAX : params->tp_numerics[TPI_MAX_DATAGRAM_FRAME_SIZE];
     }
-
+    /* Enable congestion control data exchange by default */
+    LSQ_NOTICE("congestion control data exchange enabled by default");
+    conn->ifc_mflags |= MF_CONGESTION_DATA;
     conn->ifc_pub.max_peer_ack_usec = params->tp_max_ack_delay * 1000;
 
     if ((params->tp_set & (1 << TPI_MAX_UDP_PAYLOAD_SIZE))
@@ -4227,6 +4261,8 @@ ietf_full_conn_ci_is_tickable (struct lsquic_conn *lconn)
     struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
     struct lsquic_stream *stream;
 
+    // LSQ_NOTICE("ietf_full_conn_ci_is_tickable: called with conn->ifc_mflags=0x%x", conn->ifc_mflags);
+
     if (!TAILQ_EMPTY(&conn->ifc_pub.service_streams))
     {
         LSQ_DEBUG("tickable: there are streams to be serviced");
@@ -4257,6 +4293,20 @@ ietf_full_conn_ci_is_tickable (struct lsquic_conn *lconn)
         {
             LSQ_DEBUG("tickable: want to write DATAGRAM frame");
             goto check_can_send;
+        }
+        if (conn->ifc_mflags & MF_WANT_CC_DATA_SEND)
+        {
+            LSQ_DEBUG("tickable: want to send CONGESTION_DATA frame");
+            /* For CONGESTION_DATA, we want to keep connection tickable even if
+             * can_send is false, so we can retry when congestion window opens.
+             * However, we still check can_send first to avoid unnecessary ticks. */
+            if (lsquic_send_ctl_can_send(&conn->ifc_send_ctl))
+                return 1;
+            /* If can_send is false but MF_WANT_CC_DATA_SEND is set, still return
+             * tickable so connection can be retried. The send_ctl_can_send may
+             * have scheduled the connection for later (via SC_SCHED_TICK flag). */
+            LSQ_DEBUG("tickable: MF_WANT_CC_DATA_SEND set but can_send=false, keeping tickable for retry");
+            return 1;
         }
         if (conn->ifc_conn.cn_flags & LSCONN_HANDSHAKE_DONE ?
                 lsquic_send_ctl_has_buffered(&conn->ifc_send_ctl) :
@@ -6917,6 +6967,170 @@ process_datagram_frame (struct ietf_full_conn *conn,
     return parsed_len;
 }
 
+static unsigned
+process_congestion_data_frame (struct ietf_full_conn *conn,
+    struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
+{
+    struct cc_network_stats stats;
+    struct cc_integrity_tag tag;
+    int parsed_len;
+    const char *side = (conn->ifc_conn.cn_flags & LSCONN_SERVER) ? "SERVER" : "CLIENT";
+
+    LSQ_WARN("%s: process_congestion_data_frame called with len=%zu, mflags=0x%x", side, len, conn->ifc_mflags);
+
+    if (!(conn->ifc_mflags & MF_CONGESTION_DATA))
+    {
+        LSQ_WARN("%s: MF_CONGESTION_DATA flag not set, aborting", side);
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION,
+            "Received unexpected CONGESTION_DATA frame (not negotiated)");
+        return 0;
+    }
+
+    LSQ_WARN("%s: Calling pf_parse_congestion_data_frame with len=%zu", side, len);
+    parsed_len = conn->ifc_conn.cn_pf->pf_parse_congestion_data_frame(p, len,
+                                                                    &stats, &tag);
+    LSQ_WARN("%s: pf_parse_congestion_data_frame returned %d", side, parsed_len);
+    if (parsed_len < 0)
+    {
+        LSQ_WARN("%s: Failed to parse CONGESTION_DATA frame (parsed_len=%d)", side, parsed_len);
+        return 0;
+    }
+
+    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "CONGESTION_DATA frame received");
+    LSQ_WARN("=== %s: CONGESTION_DATA frame received and parsed successfully (%d bytes) ===", side, parsed_len);
+
+    /* Store the received congestion control statistics */
+    store_cc_data(conn, &stats);
+
+    /* Print received statistics */
+    if (stats.fields_set & CC_FIELD_TIMESTAMP)
+    {
+        LSQ_WARN("  Timestamp: %"PRIu64, stats.timestamp);
+    }
+    if (stats.fields_set & CC_FIELD_SMOOTHED_RTT)
+    {
+        LSQ_WARN("  Smoothed RTT: %"PRIu64" ms", stats.smoothed_rtt);
+    }
+    if (stats.fields_set & CC_FIELD_MIN_RTT)
+    {
+        LSQ_WARN("  Min RTT: %"PRIu64" ms", stats.min_rtt);
+    }
+    if (stats.fields_set & CC_FIELD_LATEST_BANDWIDTH)
+    {
+        LSQ_WARN("  Latest Bandwidth: %"PRIu64" kbps", stats.latest_bandwidth);
+    }
+    if (stats.fields_set & CC_FIELD_MAX_BANDWIDTH)
+    {
+        LSQ_WARN("  Max Bandwidth: %"PRIu64" kbps", stats.max_bandwidth);
+    }
+    if (stats.fields_set & CC_FIELD_THROUGHPUT)
+    {
+        LSQ_WARN("  Throughput: %"PRIu64" kbps", stats.throughput);
+    }
+    if (stats.fields_set & CC_FIELD_LOSS_RATE)
+    {
+        LSQ_WARN("  Loss Rate: %"PRIu64, stats.loss_rate);
+    }
+    LSQ_WARN("================================================");
+
+    return parsed_len;
+}
+
+
+static unsigned
+process_congestion_data_recall_frame (struct ietf_full_conn *conn,
+    struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
+{
+    struct cc_data_recall recall;
+    int parsed_len;
+
+    if (!(conn->ifc_mflags & MF_CONGESTION_DATA))
+    {
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION,
+            "Received unexpected CONGESTION_DATA_RECALL frame (not negotiated)");
+        return 0;
+    }
+
+    parsed_len = conn->ifc_conn.cn_pf->pf_parse_congestion_data_recall_frame(p, len,
+                                                                        &recall);
+    if (parsed_len < 0)
+        return 0;
+
+    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "CONGESTION_DATA_RECALL frame received");
+    LSQ_DEBUG("CONGESTION_DATA_RECALL frame received, %d bytes", parsed_len);
+    LSQ_DEBUG("Recall request: timestamp_start=%"PRIu64", timestamp_end=%"PRIu64,
+              recall.timestamp_start, recall.timestamp_end);
+
+    /* Retrieve and send stored congestion data matching the time range */
+    if (conn->ifc_cc_data_storage.entries && conn->ifc_cc_data_storage.count > 0)
+    {
+        unsigned i, sent_count = 0;
+        const struct cc_network_stats *entry;
+        unsigned start_idx;
+
+        /* Calculate starting index for circular buffer */
+        if (conn->ifc_cc_data_storage.count < conn->ifc_cc_data_storage.capacity)
+            start_idx = 0;
+        else
+            start_idx = conn->ifc_cc_data_storage.next_idx;
+
+        /* Search through stored entries and send matching ones */
+        for (i = 0; i < conn->ifc_cc_data_storage.count; ++i)
+        {
+            entry = &conn->ifc_cc_data_storage.entries[
+                (start_idx + i) % conn->ifc_cc_data_storage.capacity];
+
+            /* Check if timestamp is in the requested range */
+            if (entry->fields_set & CC_FIELD_TIMESTAMP)
+            {
+                if (entry->timestamp >= recall.timestamp_start &&
+                    entry->timestamp <= recall.timestamp_end)
+                {
+                    /* Check path tuple match if specified in recall */
+                    int path_match = 1;
+                    if (recall.path_tuple.addr_family != 0)
+                    {
+                        /* Simple path tuple comparison */
+                        if (recall.path_tuple.addr_family != entry->path_tuple.addr_family ||
+                            recall.path_tuple.local_port != entry->path_tuple.local_port ||
+                            recall.path_tuple.remote_port != entry->path_tuple.remote_port)
+                        {
+                            path_match = 0;
+                        }
+                        else if (recall.path_tuple.addr_family == 4)
+                        {
+                            if (memcmp(recall.path_tuple.local_addr, entry->path_tuple.local_addr, 4) != 0 ||
+                                memcmp(recall.path_tuple.remote_addr, entry->path_tuple.remote_addr, 4) != 0)
+                                path_match = 0;
+                        }
+                        else if (recall.path_tuple.addr_family == 6)
+                        {
+                            if (memcmp(recall.path_tuple.local_addr, entry->path_tuple.local_addr, 16) != 0 ||
+                                memcmp(recall.path_tuple.remote_addr, entry->path_tuple.remote_addr, 16) != 0)
+                                path_match = 0;
+                        }
+                    }
+
+                    if (path_match)
+                    {
+                        if (write_congestion_data_with_stats(conn, entry))
+                            ++sent_count;
+                    }
+                }
+            }
+        }
+
+        LSQ_DEBUG("Sent %u matching congestion data entries in response to recall",
+                  sent_count);
+    }
+    else
+    {
+        LSQ_DEBUG("No stored congestion data available for recall");
+    }
+
+    return parsed_len;
+}
+
 
 typedef unsigned (*process_frame_f)(
     struct ietf_full_conn *, struct lsquic_packet_in *,
@@ -6948,6 +7162,8 @@ static process_frame_f const process_frames[N_QUIC_FRAMES] =
     [QUIC_FRAME_ACK_FREQUENCY]      =  process_ack_frequency_frame,
     [QUIC_FRAME_TIMESTAMP]          =  process_timestamp_frame,
     [QUIC_FRAME_DATAGRAM]           =  process_datagram_frame,
+    [QUIC_FRAME_CC_DATA]            =  process_congestion_data_frame,
+    [QUIC_FRAME_CC_DATA_RECALL]     =  process_congestion_data_recall_frame,
 };
 
 
@@ -8431,6 +8647,169 @@ write_datagram (struct ietf_full_conn *conn)
     return 1;
 }
 
+/* Store received congestion control statistics */
+static void
+store_cc_data (struct ietf_full_conn *conn, const struct cc_network_stats *stats)
+{
+    struct cc_network_stats *entry;
+    const unsigned max_capacity = 100;  /* Maximum number of entries to store */
+
+    if (!conn->ifc_cc_data_storage.entries)
+    {
+        /* Allocate storage if not already allocated */
+        conn->ifc_cc_data_storage.capacity = max_capacity;
+        conn->ifc_cc_data_storage.entries = malloc(
+            sizeof(struct cc_network_stats) * max_capacity);
+        if (!conn->ifc_cc_data_storage.entries)
+        {
+            LSQ_WARN("failed to allocate congestion data storage");
+            return;
+        }
+    }
+
+    /* Use circular buffer: overwrite oldest entry */
+    entry = &conn->ifc_cc_data_storage.entries[conn->ifc_cc_data_storage.next_idx];
+    *entry = *stats;
+
+    conn->ifc_cc_data_storage.next_idx = (conn->ifc_cc_data_storage.next_idx + 1)
+                                            % conn->ifc_cc_data_storage.capacity;
+    if (conn->ifc_cc_data_storage.count < conn->ifc_cc_data_storage.capacity)
+        ++conn->ifc_cc_data_storage.count;
+
+    LSQ_DEBUG("stored congestion data entry (timestamp: %"PRIu64", count: %u)",
+              stats->timestamp, conn->ifc_cc_data_storage.count);
+}
+
+
+/* Write a specific CONGESTION_DATA frame with given statistics */
+static int
+write_congestion_data_with_stats (struct ietf_full_conn *conn,
+                                  const struct cc_network_stats *stats)
+{
+    struct lsquic_packet_out *packet_out;
+    size_t need;
+    int w;
+    unsigned off;
+
+    if (!(conn->ifc_mflags & MF_CONGESTION_DATA))
+        return 0;
+
+    /* Calculate frame size (without integrity tag for now) */
+    need = conn->ifc_conn.cn_pf->pf_congestion_data_frame_size(stats, 0);
+    if (need == 0)
+    {
+        LSQ_DEBUG("could not calculate CONGESTION_DATA frame size");
+        return 0;
+    }
+
+    packet_out = get_writeable_packet_on_path(conn, need, CUR_NPATH(conn), 0);
+    if (!packet_out)
+        return 0;
+
+    off = packet_out->po_data_sz;
+    w = conn->ifc_conn.cn_pf->pf_gen_congestion_data_frame(
+            packet_out->po_data + off,
+            lsquic_packet_out_avail(packet_out), stats, NULL);
+    if (w < 0)
+    {
+        LSQ_DEBUG("could not generate CONGESTION_DATA frame");
+        return 0;
+    }
+
+    if (0 != lsquic_packet_out_add_frame(packet_out, conn->ifc_pub.mm, 0,
+                        QUIC_FRAME_CC_DATA, off, w))
+    {
+        ABORT_ERROR("adding CONGESTION_DATA frame to packet failed: %d", errno);
+        return 0;
+    }
+
+    packet_out->po_regen_sz += w;
+    packet_out->po_frame_types |= QUIC_FTBIT_CC_DATA;
+    lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, w);
+
+    LSQ_DEBUG("CONGESTION_DATA frame sent (recall response), %d bytes", w);
+    return 1;
+}
+
+
+/* Write CONGESTION_DATA frame - draft-yuan-quic-congestion-data-00 */
+static int
+write_congestion_data (struct ietf_full_conn *conn)
+{
+    struct lsquic_packet_out *packet_out;
+    struct cc_network_stats stats;
+    size_t need;
+    int w;
+    unsigned off;
+    const char *side = (conn->ifc_conn.cn_flags & LSCONN_SERVER) ? "SERVER" : "CLIENT";
+
+    if (!(conn->ifc_mflags & MF_CONGESTION_DATA))
+    {
+        LSQ_DEBUG("write_congestion_data: MF_CONGESTION_DATA flag not set");
+        return 0;
+    }
+
+    /* Check if we should send congestion data (triggered by flag or periodic) */
+    if (!(conn->ifc_mflags & MF_WANT_CC_DATA_SEND))
+    {
+        LSQ_DEBUG("write_congestion_data: MF_WANT_CC_DATA_SEND flag not set");
+        return 0;
+    }
+
+    /* Collect network statistics */
+    if (lsquic_cc_data_collect_stats(&conn->ifc_pub, &conn->ifc_send_ctl,
+                                     CUR_NPATH(conn), &stats) < 0)
+    {
+        LSQ_WARN("%s: write_congestion_data: failed to collect network statistics", side);
+        return 0;
+    }
+
+    /* Calculate frame size (without integrity tag for now) */
+    need = conn->ifc_conn.cn_pf->pf_congestion_data_frame_size(&stats, 0);
+    if (need == 0)
+    {
+        LSQ_WARN("%s: write_congestion_data: failed to calculate frame size", side);
+        return 0;
+    }
+
+    packet_out = get_writeable_packet_on_path(conn, need, CUR_NPATH(conn), 0);
+    if (!packet_out)
+    {
+        /* Log why we can't get a writeable packet */
+        int can_send = lsquic_send_ctl_can_send(&conn->ifc_send_ctl);
+        unsigned n_scheduled = lsquic_send_ctl_n_scheduled(&conn->ifc_send_ctl);
+        LSQ_WARN("%s: write_congestion_data: cannot get writeable packet (need=%u, can_send=%d, n_scheduled=%u)",
+                 side, need, can_send, n_scheduled);
+        return 0;
+    }
+
+    off = packet_out->po_data_sz;
+    w = conn->ifc_conn.cn_pf->pf_gen_congestion_data_frame(
+            packet_out->po_data + off,
+            lsquic_packet_out_avail(packet_out), &stats, NULL);
+    if (w < 0)
+        return 0;
+
+    if (0 != lsquic_packet_out_add_frame(packet_out, conn->ifc_pub.mm, 0,
+                        QUIC_FRAME_CC_DATA, off, w))
+    {
+        ABORT_ERROR("adding CONGESTION_DATA frame to packet failed: %d", errno);
+        return 0;
+    }
+
+    packet_out->po_regen_sz += w;
+    packet_out->po_frame_types |= QUIC_FTBIT_CC_DATA;
+    lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, w);
+
+    /* Clear the send flag */
+    conn->ifc_mflags &= ~MF_WANT_CC_DATA_SEND;
+
+    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "CONGESTION_DATA frame sent");
+    LSQ_WARN("%s: CONGESTION_DATA frame sent successfully, %d bytes", side, w);
+
+    return 1;
+}
+
 
 static int
 noprogress_timeout_is_enabled (const struct ietf_full_conn *conn)
@@ -8462,6 +8841,12 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
     int have_delayed_packets, s;
     enum tick_st tick = 0;
     unsigned n;
+    const char *side = (conn->ifc_conn.cn_flags & LSCONN_SERVER) ? "SERVER" : "CLIENT";
+
+    if (conn->ifc_mflags & MF_WANT_CC_DATA_SEND)
+    {
+        LSQ_WARN("%s: tick: called with MF_WANT_CC_DATA_SEND set, now=%"PRIu64, side, now);
+    }
 
 #define CLOSE_IF_NECESSARY() do {                                       \
     if (conn->ifc_flags & IFC_IMMEDIATE_CLOSE_FLAGS)                    \
@@ -8521,7 +8906,10 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
     CLOSE_IF_NECESSARY();
 
     if (lsquic_send_ctl_pacer_blocked(&conn->ifc_send_ctl))
+    {
+       LSQ_WARN("tick: pacer blocked, skipping write section (including CONGESTION_DATA)");
         goto end_write;
+    }
 
     if (conn->ifc_flags & IFC_FIRST_TICK)
     {
@@ -8559,6 +8947,7 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
          * and replaced by new ACK packet.  This way, we are never more
          * than 1 packet over CWND.
          */
+       LSQ_WARN("tick: have_delayed_packets, skipping write section (including CONGESTION_DATA)");
         tick |= TICK_SEND;
         if (conn->ifc_flags & IFC_CLOSING)
             goto end_write;
@@ -8618,6 +9007,7 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
             process_crypto_stream_write_events(conn);
         if (!(conn->ifc_mflags & MF_DOING_0RTT))
         {
+           LSQ_WARN("tick: handshake not done and not doing 0RTT, skipping CONGESTION_DATA");
             lsquic_send_ctl_maybe_app_limited(&conn->ifc_send_ctl,
                                                             CUR_NPATH(conn));
             goto end_write;
@@ -8629,11 +9019,105 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
     s = lsquic_send_ctl_schedule_buffered(&conn->ifc_send_ctl, BPT_HIGHEST_PRIO);
     conn->ifc_flags |= (s < 0) << IFC_BIT_ERROR;
     if (!write_is_possible(conn))
+    {
+       LSQ_WARN("tick: write not possible after schedule_buffered, skipping CONGESTION_DATA");
         goto end_write;
+    }
 
     while ((conn->ifc_mflags & MF_WANT_DATAGRAM_WRITE) && write_datagram(conn))
         if (!write_is_possible(conn))
+        {
+           LSQ_WARN("tick: write not possible after datagram, skipping CONGESTION_DATA");
             goto end_write;
+        }
+
+    /* Send CONGESTION_DATA frame if enabled */
+    /* Only auto-send on server side, and only every 2 seconds */
+    if (conn->ifc_mflags & MF_CONGESTION_DATA)
+    {
+        const char *side = (conn->ifc_conn.cn_flags & LSCONN_SERVER) ? "SERVER" : "CLIENT";
+        int should_send = 0;
+        
+        /* Check if MF_WANT_CC_DATA_SEND is explicitly set (for immediate send) */
+        /* Save this before we potentially set the flag in auto-send logic */
+        int was_explicit_trigger = !!(conn->ifc_mflags & MF_WANT_CC_DATA_SEND);
+        if (was_explicit_trigger)
+        {
+            should_send = 1;
+            LSQ_WARN("%s: tick: MF_WANT_CC_DATA_SEND is set, will attempt to send CONGESTION_DATA", side);
+        }
+        /* Only auto-send on server side, every 2 seconds */
+        /* Note: We also check auto-send condition even if MF_WANT_CC_DATA_SEND is set.
+         * This allows auto-send to retry if explicit trigger failed due to congestion control.
+         * If auto-send condition is met, we'll try to send (which will retry the failed explicit trigger). */
+        if ((conn->ifc_conn.cn_flags & LSCONN_SERVER))
+        {
+            lsquic_time_t time_since_last_send = now - conn->ifc_last_cc_data_sent;
+            if (conn->ifc_last_cc_data_sent == 0 || time_since_last_send >= 2000000)  /* 2 seconds in microseconds */
+            {
+                should_send = 1;
+                /* Set MF_WANT_CC_DATA_SEND to allow write_congestion_data to proceed */
+                /* If it was already set (explicit trigger), this is a no-op */
+                conn->ifc_mflags |= MF_WANT_CC_DATA_SEND;
+                if (!was_explicit_trigger)
+                {
+                    LSQ_WARN("%s: tick: auto-send condition met (time_since_last=%"PRIu64" us), will attempt to send CONGESTION_DATA", 
+                             side, time_since_last_send);
+                }
+                else
+                {
+                    LSQ_WARN("%s: tick: auto-send condition met (time_since_last=%"PRIu64" us), will retry explicit trigger", 
+                             side, time_since_last_send);
+                }
+            }
+        }
+        
+        if (should_send)
+        {
+            lsquic_time_t time_since_last_send = now - conn->ifc_last_cc_data_sent;
+            int was_explicit = was_explicit_trigger;
+            if (write_congestion_data(conn))
+            {
+                conn->ifc_last_cc_data_sent = now;
+                /* Clear MF_WANT_CC_DATA_SEND flag after successful send */
+                conn->ifc_mflags &= ~MF_WANT_CC_DATA_SEND;
+                /* Also clear SF_SEND_PING if it was set by trigger_cc_data_send */
+                if (conn->ifc_send_flags & SF_SEND_PING)
+                {
+                    /* Only clear if we're not in the middle of generating a ping */
+                    if (lsquic_send_ctl_n_scheduled(&conn->ifc_send_ctl) == 0)
+                        conn->ifc_send_flags &= ~SF_SEND_PING;
+                }
+                if (was_explicit && (conn->ifc_conn.cn_flags & LSCONN_SERVER))
+                {
+                    /* This was triggered by external code (e.g., timer), not auto-send */
+                    LSQ_WARN("%s: Sent CONGESTION_DATA frame (explicit trigger, time_since_last=%"PRIu64" us)", 
+                             side, time_since_last_send);
+                }
+                else if (was_explicit)
+                {
+                    LSQ_WARN("%s: Sent CONGESTION_DATA frame (explicit trigger)", side);
+                }
+                else
+                {
+                    LSQ_WARN("%s: Auto-sent CONGESTION_DATA frame (periodic, time_since_last=%"PRIu64" us)", 
+                             side, time_since_last_send);
+                }
+                if (!write_is_possible(conn))
+                    goto end_write;
+            }
+            else
+            {
+                LSQ_WARN("%s: Failed to send CONGESTION_DATA frame (write_congestion_data returned 0, time_since_last=%"PRIu64" us, was_explicit=%d)",
+                         side, time_since_last_send, was_explicit);
+                /* Keep the flag set so connection remains tickable and we can retry */
+                /* Don't clear MF_WANT_CC_DATA_SEND here - let it be cleared only on success */
+                /* This ensures the connection stays tickable via ci_is_tickable */
+                /* Also ensure we return TICK_SEND to keep connection in tickable queue */
+                tick |= TICK_SEND;
+            }
+        }
+    }
 
     if (!TAILQ_EMPTY(&conn->ifc_pub.write_streams))
     {

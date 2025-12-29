@@ -34,6 +34,8 @@ add_executable(duck_server duck_server.c prog.c test_common.c test_cert.c)
 add_executable(duck_client duck_client.c prog.c test_common.c test_cert.c)
 add_executable(perf_client perf_client.c prog.c test_common.c test_cert.c)
 add_executable(perf_server perf_server.c prog.c test_common.c test_cert.c)
+add_executable(cc_data_server cc_data_server.c prog.c test_common.c test_cert.c)
+add_executable(cc_data_client cc_data_client.c prog.c test_common.c test_cert.c)
 
 
 IF (NOT MSVC)
@@ -69,6 +71,8 @@ TARGET_LINK_LIBRARIES(duck_server ${LIBS})
 TARGET_LINK_LIBRARIES(duck_client ${LIBS})
 TARGET_LINK_LIBRARIES(perf_client ${LIBS})
 TARGET_LINK_LIBRARIES(perf_server ${LIBS})
+TARGET_LINK_LIBRARIES(cc_data_server ${LIBS})
+TARGET_LINK_LIBRARIES(cc_data_client ${LIBS})
 
 
 INCLUDE(CheckFunctionExists)

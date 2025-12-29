@@ -300,8 +300,9 @@ const enum quic_frame_type lsquic_iquic_byte2type[0x40] =
     [0x37] = QUIC_FRAME_INVALID,
     [0x38] = QUIC_FRAME_INVALID,
     [0x39] = QUIC_FRAME_INVALID,
-    [0x3A] = QUIC_FRAME_INVALID,
-    [0x3B] = QUIC_FRAME_INVALID,
+    /* TODO: Replace 0x3A and 0x3B with actual frame type IDs from draft */
+    [0x3A] = QUIC_FRAME_CC_DATA,        /* draft-yuan-quic-congestion-data-00 */
+    [0x3B] = QUIC_FRAME_CC_DATA_RECALL, /* draft-yuan-quic-congestion-data-00 */
     [0x3C] = QUIC_FRAME_INVALID,
     [0x3D] = QUIC_FRAME_INVALID,
     [0x3E] = QUIC_FRAME_INVALID,

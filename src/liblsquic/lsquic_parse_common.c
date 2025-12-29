@@ -351,7 +351,8 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_LSQVER][N_ENC_LEVS] =
                     | QUIC_FTBIT_NEW_CONNECTION_ID | QUIC_FTBIT_STOP_SENDING
                     | QUIC_FTBIT_PATH_CHALLENGE
                     | QUIC_FTBIT_DATAGRAM
-                    | QUIC_FTBIT_RETIRE_CONNECTION_ID,
+                    | QUIC_FTBIT_RETIRE_CONNECTION_ID
+                    | QUIC_FTBIT_CC_DATA | QUIC_FTBIT_CC_DATA_RECALL,
     [ENC_LEV_HSK]  = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
                     | QUIC_FTBIT_ACK| QUIC_FTBIT_CONNECTION_CLOSE,
     [ENC_LEV_APP]  = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
@@ -367,7 +368,7 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_LSQVER][N_ENC_LEVS] =
                     | QUIC_FTBIT_RETIRE_CONNECTION_ID | QUIC_FTBIT_NEW_TOKEN
                     | QUIC_FTBIT_TIMESTAMP
                     | QUIC_FTBIT_DATAGRAM
-                    ,
+                    | QUIC_FTBIT_CC_DATA | QUIC_FTBIT_CC_DATA_RECALL,
     },
     [LSQVER_I001] = {
     [ENC_LEV_INIT] = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
@@ -381,7 +382,8 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_LSQVER][N_ENC_LEVS] =
                     | QUIC_FTBIT_NEW_CONNECTION_ID | QUIC_FTBIT_STOP_SENDING
                     | QUIC_FTBIT_PATH_CHALLENGE
                     | QUIC_FTBIT_DATAGRAM
-                    | QUIC_FTBIT_RETIRE_CONNECTION_ID,
+                    | QUIC_FTBIT_RETIRE_CONNECTION_ID
+                    | QUIC_FTBIT_CC_DATA | QUIC_FTBIT_CC_DATA_RECALL,
     [ENC_LEV_HSK]  = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
                     | QUIC_FTBIT_ACK| QUIC_FTBIT_CONNECTION_CLOSE,
     [ENC_LEV_APP]  = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
@@ -397,7 +399,7 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_LSQVER][N_ENC_LEVS] =
                     | QUIC_FTBIT_RETIRE_CONNECTION_ID | QUIC_FTBIT_NEW_TOKEN
                     | QUIC_FTBIT_TIMESTAMP
                     | QUIC_FTBIT_DATAGRAM
-                    ,
+                    | QUIC_FTBIT_CC_DATA | QUIC_FTBIT_CC_DATA_RECALL,
     },
     [LSQVER_ID29] = {
     [ENC_LEV_INIT] = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
@@ -411,7 +413,8 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_LSQVER][N_ENC_LEVS] =
                     | QUIC_FTBIT_NEW_CONNECTION_ID | QUIC_FTBIT_STOP_SENDING
                     | QUIC_FTBIT_PATH_CHALLENGE | QUIC_FTBIT_PATH_RESPONSE
                     | QUIC_FTBIT_DATAGRAM
-                    | QUIC_FTBIT_RETIRE_CONNECTION_ID,
+                    | QUIC_FTBIT_RETIRE_CONNECTION_ID
+                    | QUIC_FTBIT_CC_DATA | QUIC_FTBIT_CC_DATA_RECALL,
     [ENC_LEV_HSK]  = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
                     | QUIC_FTBIT_ACK| QUIC_FTBIT_CONNECTION_CLOSE,
     [ENC_LEV_APP]  = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
@@ -427,7 +430,7 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_LSQVER][N_ENC_LEVS] =
                     | QUIC_FTBIT_RETIRE_CONNECTION_ID | QUIC_FTBIT_NEW_TOKEN
                     | QUIC_FTBIT_TIMESTAMP
                     | QUIC_FTBIT_DATAGRAM
-                    ,
+                    | QUIC_FTBIT_CC_DATA | QUIC_FTBIT_CC_DATA_RECALL,
     },
     [LSQVER_ID27] = {
     [ENC_LEV_INIT] = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
@@ -442,7 +445,7 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_LSQVER][N_ENC_LEVS] =
                     | QUIC_FTBIT_PATH_CHALLENGE | QUIC_FTBIT_PATH_RESPONSE
                     | QUIC_FTBIT_RETIRE_CONNECTION_ID
                     | QUIC_FTBIT_DATAGRAM
-                    ,
+                    | QUIC_FTBIT_CC_DATA | QUIC_FTBIT_CC_DATA_RECALL,
     [ENC_LEV_HSK]  = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
                     | QUIC_FTBIT_ACK| QUIC_FTBIT_CONNECTION_CLOSE,
     [ENC_LEV_APP]  = QUIC_FTBIT_CRYPTO | QUIC_FTBIT_PADDING | QUIC_FTBIT_PING
@@ -458,6 +461,6 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_LSQVER][N_ENC_LEVS] =
                     | QUIC_FTBIT_RETIRE_CONNECTION_ID | QUIC_FTBIT_NEW_TOKEN
                     | QUIC_FTBIT_TIMESTAMP
                     | QUIC_FTBIT_DATAGRAM
-                    ,
+                    | QUIC_FTBIT_CC_DATA | QUIC_FTBIT_CC_DATA_RECALL,
     },
 };

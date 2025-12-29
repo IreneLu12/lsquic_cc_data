@@ -39,6 +39,7 @@
 #include "lsquic_trans_params.h"
 #include "lsquic_parse_ietf.h"
 #include "lsquic_qtags.h"
+#include "lsquic_cc_data.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_PARSE
 #include "lsquic_logger.h"
@@ -2272,6 +2273,258 @@ ietf_v1_gen_datagram_frame (unsigned char *buf, size_t bufsz, size_t min_sz,
 }
 
 
+
+/* Congestion Control Data frames - draft-yuan-quic-congestion-data-00 */
+
+static int
+ietf_v1_parse_congestion_data_frame (const unsigned char *buf, size_t buf_len,
+                                      struct cc_network_stats *stats,
+                                      struct cc_integrity_tag *tag)
+{
+    int n;
+    size_t stats_len;
+    const unsigned char *p = buf;
+    const unsigned char *end = buf + buf_len;
+
+    if (buf_len < 1)
+        return -1;
+
+    /* Frame type has been checked already */
+    assert(buf[0] == 0x3A);
+
+    p++;  /* Skip frame type */
+
+    /* Decode network statistics */
+    if (p >= end)
+        return -1;
+
+    /* Try to decode statistics - we need to find where stats end */
+    /* For now, assume stats take up all remaining space unless there's an integrity tag */
+    /* TODO: Properly parse the TLV format to determine stats length */
+    stats_len = end - p;
+
+    /* Try parsing without integrity tag first (most common case) */
+    n = lsquic_cc_data_decode(p, stats_len, stats);
+    if (n >= 0)
+    {
+        /* Successfully parsed - check if we consumed all data or if there's an integrity tag */
+        if (n == (int)stats_len)
+        {
+            /* Parsed all data without integrity tag */
+            p += n;
+            if (tag)
+                memset(tag, 0, sizeof(*tag));
+        }
+        else if (n + CC_INTEGRITY_TAG_SIZE == (int)stats_len)
+        {
+            /* Parsed stats, remaining bytes might be integrity tag */
+            p += n;
+            
+            /* Decode integrity tag */
+            if (tag)
+            {
+                n = lsquic_cc_data_integrity_tag_decode(p, end - p, tag);
+                if (n < 0)
+                {
+                    memset(tag, 0, sizeof(*tag));
+                    p += CC_INTEGRITY_TAG_SIZE;  /* Skip the bytes anyway */
+                }
+                else
+                {
+                    p += n;
+                }
+            }
+            else
+            {
+                p += CC_INTEGRITY_TAG_SIZE;
+            }
+        }
+        else
+        {
+            /* Parsed some data but length doesn't match - use what we got */
+            p += n;
+            if (tag)
+                memset(tag, 0, sizeof(*tag));
+        }
+    }
+    else if (stats_len >= CC_INTEGRITY_TAG_SIZE)
+    {
+        /* First attempt failed, try with integrity tag */
+        stats_len -= CC_INTEGRITY_TAG_SIZE;
+        n = lsquic_cc_data_decode(p, stats_len, stats);
+        if (n >= 0)
+        {
+            p += n;
+
+            /* Decode integrity tag */
+            if (tag)
+            {
+                n = lsquic_cc_data_integrity_tag_decode(p, end - p, tag);
+                if (n < 0)
+                    return -1;
+                p += n;
+            }
+            else
+            {
+                p += CC_INTEGRITY_TAG_SIZE;
+            }
+        }
+        else
+        {
+            return -1;
+        }
+    }
+    else
+    {
+        return -1;
+    }
+
+    return (int)(p - buf);
+}
+
+
+static int
+ietf_v1_gen_congestion_data_frame (unsigned char *buf, size_t bufsz,
+                                    const struct cc_network_stats *stats,
+                                    const struct cc_integrity_tag *tag)
+{
+    unsigned char *p = buf;
+    size_t rem = bufsz;
+    int n;
+    size_t stats_sz, tag_sz = 0;
+
+    if (bufsz < 1)
+    {
+        errno = ENOBUFS;
+        return -1;
+    }
+
+    /* Write frame type */
+    *p++ = 0x3A;
+    rem--;
+
+    /* Calculate size needed */
+    stats_sz = lsquic_cc_data_encode_size(stats);
+    if (stats_sz < 0)
+        return -1;
+
+    if (tag)
+        tag_sz = CC_INTEGRITY_TAG_SIZE;
+
+    if (rem < (size_t)stats_sz + tag_sz)
+    {
+        errno = ENOBUFS;
+        return -1;
+    }
+
+    /* Encode network statistics */
+    n = lsquic_cc_data_encode(stats, p, rem);
+    if (n < 0)
+        return -1;
+    p += n;
+    rem -= n;
+
+    /* Encode integrity tag if present */
+    if (tag && tag_sz > 0)
+    {
+        n = lsquic_cc_data_integrity_tag_encode(tag, p, rem);
+        if (n < 0)
+            return -1;
+        p += n;
+        rem -= n;
+    }
+
+    return (int)(p - buf);
+}
+
+
+static unsigned
+ietf_v1_congestion_data_frame_size (const struct cc_network_stats *stats,
+                                     int has_integrity_tag)
+{
+    size_t size = 1;  /* Frame type */
+    int stats_sz;
+
+    stats_sz = lsquic_cc_data_encode_size(stats);
+    if (stats_sz < 0)
+        return 0;
+
+    size += stats_sz;
+    if (has_integrity_tag)
+        size += CC_INTEGRITY_TAG_SIZE;
+
+    return (unsigned)size;
+}
+
+
+static int
+ietf_v1_parse_congestion_data_recall_frame (const unsigned char *buf,
+                                              size_t buf_len,
+                                              struct cc_data_recall *recall)
+{
+    const unsigned char *p = buf;
+    const unsigned char *end = buf + buf_len;
+
+    if (buf_len < 1)
+        return -1;
+
+    /* Frame type has been checked already */
+    assert(buf[0] == 0x3B);
+
+    p++;  /* Skip frame type */
+
+    /* Decode recall data */
+    return lsquic_cc_data_recall_decode(p, end - p, recall);
+}
+
+
+static int
+ietf_v1_gen_congestion_data_recall_frame (unsigned char *buf, size_t bufsz,
+                                           const struct cc_data_recall *recall)
+{
+    unsigned char *p = buf;
+    int n;
+
+    if (bufsz < 1)
+    {
+        errno = ENOBUFS;
+        return -1;
+    }
+
+    /* Write frame type */
+    *p++ = 0x3B;
+
+    /* Encode recall data */
+    n = lsquic_cc_data_recall_encode(recall, p, bufsz - 1);
+    if (n < 0)
+        return -1;
+
+    return 1 + n;
+}
+
+
+static unsigned
+ietf_v1_congestion_data_recall_frame_size (const struct cc_data_recall *recall)
+{
+    int n;
+    size_t size = 1;  /* Frame type */
+
+    /* Calculate path tuple size */
+    if (recall->path_tuple.addr_family == 4)
+        size += 1 + 4 * 2 + 4;  /* addr_family + 2 addresses + 2 ports */
+    else if (recall->path_tuple.addr_family == 6)
+        size += 1 + 16 * 2 + 4;  /* addr_family + 2 addresses + 2 ports */
+    else
+        return 0;  /* Invalid address family */
+
+    /* Add timestamp sizes (both as varints) */
+    size += vint_size(recall->timestamp_start);
+    size += vint_size(recall->timestamp_end);
+
+    return (unsigned)size;
+}
+
+
 const struct parse_funcs lsquic_parse_funcs_ietf_v1 =
 {
     .pf_gen_reg_pkt_header            =  ietf_v1_gen_reg_pkt_header,
@@ -2345,4 +2598,11 @@ const struct parse_funcs lsquic_parse_funcs_ietf_v1 =
     .pf_parse_datagram_frame          =  ietf_v1_parse_datagram_frame,
     .pf_gen_datagram_frame            =  ietf_v1_gen_datagram_frame,
     .pf_datagram_frame_size           =  ietf_v1_datagram_frame_size,
+    .pf_parse_congestion_data_frame   =  ietf_v1_parse_congestion_data_frame,
+    .pf_gen_congestion_data_frame     =  ietf_v1_gen_congestion_data_frame,
+    .pf_congestion_data_frame_size    =  ietf_v1_congestion_data_frame_size,
+    .pf_parse_congestion_data_recall_frame =  ietf_v1_parse_congestion_data_recall_frame,
+    .pf_gen_congestion_data_recall_frame   =  ietf_v1_gen_congestion_data_recall_frame,
+    .pf_congestion_data_recall_frame_size  =  ietf_v1_congestion_data_recall_frame_size,
+
 };

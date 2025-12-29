@@ -65,6 +65,8 @@ tpi_val_2_enum (uint64_t tpi_val)
     case 0xDE1A:    return TPI_MIN_ACK_DELAY;
     case 0xFF02DE1A:return TPI_MIN_ACK_DELAY_02;
     case 0x7158:    return TPI_TIMESTAMPS;
+    /* TODO: Replace 0xCCDA with the actual transport parameter ID from draft */
+    case 0x61:    return TPI_ENABLE_CONGESTION_DATA;
     default:        return INT_MAX;
     }
 }
@@ -99,6 +101,9 @@ static const unsigned enum_2_tpi_val[LAST_TPI + 1] =
     [TPI_MIN_ACK_DELAY_02]                  =  0xFF02DE1A,
     [TPI_TIMESTAMPS]                        =  0x7158,
     [TPI_GREASE_QUIC_BIT]                   =  0x2AB2,
+    /* TODO: Replace 0xCCDA with the actual transport parameter ID from draft */
+    [TPI_ENABLE_CONGESTION_DATA]            =  0xCCDA,
+
 };
 
 
@@ -130,6 +135,7 @@ const char * const lsquic_tpi2str[LAST_TPI + 1] =
     [TPI_MIN_ACK_DELAY_02]                  =  "min_ack_delay_02",
     [TPI_TIMESTAMPS]                        =  "timestamps",
     [TPI_GREASE_QUIC_BIT]                   =  "grease_quic_bit",
+    [TPI_ENABLE_CONGESTION_DATA]            =  "enable_congestion_data",
 };
 #define tpi2str lsquic_tpi2str
 
@@ -462,6 +468,7 @@ lsquic_tp_encode (const struct transport_params *params, int is_server,
                 break;
             case TPI_DISABLE_ACTIVE_MIGRATION:
             case TPI_GREASE_QUIC_BIT:
+            case TPI_ENABLE_CONGESTION_DATA:
                 *p++ = 0;
                 break;
 #if LSQUIC_TEST_QUANTUM_READINESS
@@ -601,6 +608,7 @@ lsquic_tp_decode (const unsigned char *const buf, size_t bufsz,
             break;
         case TPI_DISABLE_ACTIVE_MIGRATION:
         case TPI_GREASE_QUIC_BIT:
+        case TPI_ENABLE_CONGESTION_DATA:
             EXPECT_LEN(0);
             break;
         case TPI_STATELESS_RESET_TOKEN:
@@ -1047,6 +1055,7 @@ lsquic_tp_encode_27 (const struct transport_params *params, int is_server,
                 break;
             case TPI_DISABLE_ACTIVE_MIGRATION:
             case TPI_GREASE_QUIC_BIT:
+            case TPI_ENABLE_CONGESTION_DATA:
                 *p++ = 0;
                 break;
 #if LSQUIC_TEST_QUANTUM_READINESS

@@ -17,6 +17,10 @@ struct lsquic_cid;
 enum packet_out_flags;
 enum lsquic_version;
 enum stream_dir;
+/* Forward declarations for congestion control data structures */
+struct cc_network_stats;
+struct cc_integrity_tag;
+struct cc_data_recall;
 
 
 struct ack_info
@@ -335,6 +339,29 @@ struct parse_funcs
         struct lsquic_conn *);
     unsigned
     (*pf_datagram_frame_size) (size_t);
+    
+    /* Congestion Control Data frames - draft-yuan-quic-congestion-data-00 */
+    int
+    (*pf_parse_congestion_data_frame) (const unsigned char *buf, size_t buf_len,
+                                        struct cc_network_stats *stats,
+                                        struct cc_integrity_tag *tag);
+    int
+    (*pf_gen_congestion_data_frame) (unsigned char *buf, size_t bufsz,
+                                        const struct cc_network_stats *stats,
+                                        const struct cc_integrity_tag *tag);
+    unsigned
+    (*pf_congestion_data_frame_size) (const struct cc_network_stats *stats,
+                                        int has_integrity_tag);
+    int
+    (*pf_parse_congestion_data_recall_frame) (const unsigned char *buf,
+                                                size_t buf_len,
+                                                struct cc_data_recall *recall);
+    int
+    (*pf_gen_congestion_data_recall_frame) (unsigned char *buf, size_t bufsz,
+                                                const struct cc_data_recall *recall);
+    unsigned
+    (*pf_congestion_data_recall_frame_size) (const struct cc_data_recall *recall);
+    
 };
 
 LSQUIC_EXTERN const struct parse_funcs lsquic_parse_funcs_gquic_Q043;

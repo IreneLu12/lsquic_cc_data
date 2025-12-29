@@ -673,6 +673,10 @@ gen_trans_params (struct enc_sess_iquic *enc_sess, unsigned char *buf,
                                             = TP_DEF_MAX_UDP_PAYLOAD_SIZE;
         params.tp_set |= 1 << TPI_MAX_DATAGRAM_FRAME_SIZE;
     }
+    // /* Enable congestion control data exchange by default */
+    LSQ_NOTICE("congestion control data exchange enabled by default");
+    params.tp_set |= 1 << TPI_ENABLE_CONGESTION_DATA;
+
 
     if (enc_sess->esi_ver_neg && enc_sess->esi_ver_neg->vn_supp
                                 != (1u << enc_sess->esi_ver_neg->vn_ver))

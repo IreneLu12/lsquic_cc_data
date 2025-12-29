@@ -49,7 +49,9 @@ enum transport_param_id
      * Empty transport parameters:
      */
     TPI_GREASE_QUIC_BIT,
-    TPI_DISABLE_ACTIVE_MIGRATION,           MAX_EMPTY_TPI = TPI_DISABLE_ACTIVE_MIGRATION,
+    TPI_DISABLE_ACTIVE_MIGRATION,
+    TPI_ENABLE_CONGESTION_DATA,              /* draft-yuan-quic-congestion-data-00 */
+    MAX_EMPTY_TPI = TPI_ENABLE_CONGESTION_DATA,
 
     /*
      * Custom handlers:
